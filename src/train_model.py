@@ -7,7 +7,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report
 
-from src.preprocessing import load_and_clean, combine_text_fields
+from preprocessing import load_and_clean, combine_text_fields
 
 DATA_PATH = "../data/emscad_core.csv"
 MODEL_DIR = Path("../models")
