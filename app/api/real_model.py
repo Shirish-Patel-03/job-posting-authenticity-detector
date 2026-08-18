@@ -1,57 +1,70 @@
-# src/train_model.py — trains the baseline fraud classifier and saves it for the API to load.
-# Run this from inside src/:   python train_model.py
-import joblib
+# app/api/real_model.py — swappable model, SAME interface as mock_predict.
+# This is why main.py only needs its import line changed to switch from mock to real.
 from pathlib import Path
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report
+import joblib
 
-from preprocessing import load_and_clean, combine_text_fields
+from src.preprocessing import clean_text  # reuse the exact cleaning used at training time
 
-DATA_PATH = "../data/emscad_core.csv"
-MODEL_DIR = Path("../models")
+MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 
+# Loaded once when this module is imported (i.e. once per API startup) —
+# NOT inside real_predict(), which would reload the model from disk on every
+# single request and make the API painfully slow.
+_vectorizer = joblib.load(MODEL_DIR / "tfidf_vectorizer.joblib")
+_model = joblib.load(MODEL_DIR / "fraud_classifier.joblib")
+_coefs = _model.coef_[0]
+_feature_names = _vectorizer.get_feature_names_out()
 
-def main():
-    MODEL_DIR.mkdir(exist_ok=True)
-
-    df = load_and_clean(DATA_PATH)
-    df = combine_text_fields(df)
-
-    X = df["full_text"]
-    y = df["fraudulent"]
-
-    # stratify=y matters here — fraud is ~4.27% of postings, so a plain random
-    # split can easily starve the test set of fraud examples entirely
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-
-    vectorizer = TfidfVectorizer(
-        max_features=20000,
-        ngram_range=(1, 2),   # unigrams + bigrams — catches phrases like "wire transfer"
-        stop_words="english",
-        min_df=2,              # drop words that appear in only one posting (noise)
-    )
-    X_train_vec = vectorizer.fit_transform(X_train)
-    X_test_vec = vectorizer.transform(X_test)
-
-    # class_weight="balanced" matters here — without it, the model can hit
-    # ~96% accuracy by predicting "not fraud" every single time, since fraud
-    # is rare. Balanced weighting forces it to actually learn the minority class.
-    model = LogisticRegression(class_weight="balanced", max_iter=1000)
-    model.fit(X_train_vec, y_train)
-
-    y_pred = model.predict(X_test_vec)
-    # Report precision/recall/F1 for the "fraudulent" class specifically —
-    # accuracy alone will look great here and tell you almost nothing.
-    print(classification_report(y_test, y_pred, target_names=["genuine", "fraudulent"]))
-
-    joblib.dump(vectorizer, MODEL_DIR / "tfidf_vectorizer.joblib")
-    joblib.dump(model, MODEL_DIR / "fraud_classifier.joblib")
-    print(f"Saved model + vectorizer to {MODEL_DIR}/")
+VERDICT_THRESHOLDS = {"high_risk": 0.6, "medium_risk": 0.3}  # kept identical to mock_model's
 
 
-if __name__ == "__main__":
-    main()
+def _top_contributing_terms(text_vector, top_n: int = 3) -> list[dict]:
+    """Explainability without SHAP: for THIS specific document, find which
+    words/phrases pushed the prediction most toward 'fraudulent' by ranking
+    (tfidf value in this doc) * (that term's learned coefficient).
+
+    NOTE: unlike mock_model's fixed FLAG_POOL (e.g. "no_company_logo"), these
+    flags are raw terms the model actually learned from — e.g. "wire_transfer"
+    or "processing_fee". That's a real trade-off: more honest/data-driven,
+    but less polished for a UI. Worth curating a mapping from top terms to
+    friendlier labels once you see what the model actually surfaces.
+    """
+    indices = text_vector.nonzero()[1]
+    contributions = [(i, text_vector[0, i] * _coefs[i]) for i in indices]
+    contributions.sort(key=lambda pair: pair[1], reverse=True)
+
+    flags = []
+    for idx, contribution in contributions[:top_n]:
+        if contribution <= 0:
+            continue
+        term = _feature_names[idx]
+        flags.append({
+            "flag": term.replace(" ", "_"),
+            "evidence": f"Term '{term}' strongly associated with fraudulent postings in training data",
+        })
+    return flags
+
+
+def real_predict(posting_text: str) -> dict:
+    text = clean_text(posting_text)
+    vec = _vectorizer.transform([text])
+
+    proba_fraud = _model.predict_proba(vec)[0][1]
+    score = round(float(proba_fraud), 2)
+
+    if score > VERDICT_THRESHOLDS["high_risk"]:
+        verdict = "high_risk"
+    elif score > VERDICT_THRESHOLDS["medium_risk"]:
+        verdict = "medium_risk"
+    else:
+        verdict = "low_risk"
+
+    red_flags = _top_contributing_terms(vec) if score > VERDICT_THRESHOLDS["medium_risk"] else []
+    confidence = round(float(max(proba_fraud, 1 - proba_fraud)), 2)
+
+    return {
+        "risk_score": score,
+        "verdict": verdict,
+        "red_flags": red_flags,
+        "confidence": confidence,
+    }
