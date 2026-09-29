@@ -33,7 +33,13 @@ Produced by `src/fusion.py`. The backend must not assume anything about
 Request:
 ```json
 {
-  "posting_text": "string, the raw pasted job posting"
+  "posting_text": "string, min 30 chars",
+  "has_company_logo": "yes | no | unknown",
+  "has_screening_questions": "yes | no | unknown",
+  "salary_listed": "yes | no | unknown",
+  "employment_type": "full_time | part_time | contract | temporary | other | unknown",
+  "required_education": "high_school | bachelors | masters | certification | other | unknown",
+  "required_experience": "internship | entry | associate | mid_senior | director_executive | not_applicable | unknown"
 }
 ```
 

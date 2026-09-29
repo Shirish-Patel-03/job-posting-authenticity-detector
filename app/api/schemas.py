@@ -2,6 +2,18 @@ from pydantic import BaseModel, field_validator
 from typing import Literal
 
 
+YesNoUnknown = Literal["yes", "no", "unknown"]
+EmploymentType = Literal[
+    "full_time", "part_time", "contract", "temporary", "other", "unknown"
+]
+EducationLevel = Literal[
+    "high_school", "bachelors", "masters", "certification", "other", "unknown"
+]
+ExperienceLevel = Literal[
+    "internship", "entry", "associate", "mid_senior",
+    "director_executive", "not_applicable", "unknown",
+]
+
 class RedFlag(BaseModel):
     flag: str
     evidence: str
@@ -9,6 +21,12 @@ class RedFlag(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     posting_text: str
+    has_company_logo: YesNoUnknown = "unknown"
+    has_screening_questions: YesNoUnknown = "unknown"
+    salary_listed: YesNoUnknown = "unknown"
+    employment_type: EmploymentType = "unknown"
+    required_education: EducationLevel = "unknown"
+    required_experience: ExperienceLevel = "unknown"
 
     @field_validator("posting_text")
     @classmethod

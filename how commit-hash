@@ -1,0 +1,7 @@
+[33maadad82[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m trained model and api endpoint test
+[33m0c9b564[m Add mock predict API with FastAPI + Pydantic contract
+[33m11a1860[m Build reusable preprocessing pipeline with salary cleaning
+[33mee9608e[m Add data contracts for team coordination
+[33mfb27dbb[m Investigate and document salary_range data quality issues
+[33m1d5f246[m Align EMSCAD and synthetic dataset schemas
+[33m09409b6[m Initial project scaffold
