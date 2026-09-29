@@ -67,6 +67,76 @@ def combine_text_fields(df: pd.DataFrame) -> pd.DataFrame:
     df["full_text"] = df[TEXT_COLUMNS].agg(" ".join, axis=1).str.strip()
     return df
 
+# Structured Field addition/implementation
+STRUCTURED_COLUMNS = [
+    "has_company_logo", "has_screening_questions", "salary_listed",
+    "employment_type", "required_education", "required_experience",
+]
+
+_EMPLOYMENT_MAP = {
+    "Full-time": "full_time", "Part-time": "part_time", "Contract": "contract",
+    "Temporary": "temporary", "Other": "other",
+}
+_EDUCATION_MAP = {
+    "High School or equivalent": "high_school", "Bachelor's Degree": "bachelors",
+    "Master's Degree": "masters", "Certification": "certification",
+}
+_EXPERIENCE_MAP = {
+    "Internship": "internship", "Entry level": "entry", "Associate": "associate",
+    "Mid-Senior level": "mid_senior", "Director": "director_executive",
+    "Executive": "director_executive", "Not Applicable": "not_applicable",
+}
+
+
+def _map_with_fallback(series, mapping, fallback, unknown_values=()):
+    """Blank or explicitly-unspecified -> 'unknown'; listed values -> API vocabulary;
+    anything rare and unlisted -> fallback (e.g. 'other')."""
+    def convert(v):
+        if pd.isna(v) or v in unknown_values:
+            return "unknown"
+        return mapping.get(v, fallback)
+    return series.apply(convert)
+
+
+def build_training_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Turn the cleaned EMSCAD frame (after combine_text_fields) into the exact
+    seven-column table the model trains on, in the API's vocabulary."""
+    out = pd.DataFrame(index=df.index)
+    out["full_text"] = df["full_text"]
+    out["has_company_logo"] = df["has_company_logo"].map({1: "yes", 0: "no"})
+    out["has_screening_questions"] = df["has_questions"].map({1: "yes", 0: "no"})
+    out["salary_listed"] = df["salary_missing"].map({True: "no", False: "yes"})
+    out["employment_type"] = _map_with_fallback(df["employment_type"], _EMPLOYMENT_MAP, "other")
+    out["required_education"] = _map_with_fallback(
+        df["required_education"], _EDUCATION_MAP, "other", unknown_values=("Unspecified",)
+    )
+    out["required_experience"] = _map_with_fallback(df["required_experience"], _EXPERIENCE_MAP, "unknown")
+    out["full_text"] = df["full_text"]  # keep, already there — just confirming placement
+    out = add_text_signal_features(out)
+    return out
+
+
+def build_request_features(posting_text: str, **structured) -> pd.DataFrame:
+    """Same table, one row, from a live API request."""
+    row = {col: structured.get(col, "unknown") for col in STRUCTURED_COLUMNS}
+    row["full_text"] = clean_text(posting_text)
+    df = pd.DataFrame([row])
+    return add_text_signal_features(df)
+
+
+def add_text_signal_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Cheap engineered features derived from full_text — targets vocabulary
+    drift and scam-copy patterns not captured by TF-IDF word matching alone."""
+    df = df.copy()
+    df["has_currency"] = df["full_text"].str.contains(r"[$₹€£]", regex=True).astype(int)
+    df["urgency_count"] = df["full_text"].str.count(
+        r"\b(urgent|immediately|apply now|limited spots|act now|hurry)\b", flags=re.IGNORECASE
+    )
+    return df
+
+
+NUMERIC_SIGNAL_COLUMNS = ["urgency_count"]
+BINARY_SIGNAL_COLUMNS = ["has_currency"]
 
 if __name__ == "__main__":
     df = load_and_clean("../data/emscad_core.csv")

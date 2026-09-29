@@ -6,22 +6,22 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, confusion_matrix
 
-from preprocessing import load_and_clean, combine_text_fields
+from preprocessing import load_and_clean, combine_text_fields, build_training_features, build_request_features
 
 MODEL_DIR = Path("../models")
 
 # --- Part 1: formal test-set metrics (same split logic as training) ---
 df = load_and_clean("../data/emscad_core.csv")
 df = combine_text_fields(df)
+X = build_training_features(df)
+y = df["fraudulent"]
+
 X_train, X_test, y_train, y_test = train_test_split(
-    df["full_text"], df["fraudulent"], test_size=0.2, random_state=42, stratify=df["fraudulent"]
+    X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-vectorizer = joblib.load(MODEL_DIR / "tfidf_vectorizer.joblib")
-model = joblib.load(MODEL_DIR / "fraud_classifier.joblib")
-
-X_test_vec = vectorizer.transform(X_test)
-y_pred = model.predict(X_test_vec)
+pipeline = joblib.load(MODEL_DIR / "fraud_pipeline.joblib")
+y_pred = pipeline.predict(X_test)
 
 print("=" * 60)
 print("FORMAL TEST SET METRICS")
@@ -31,9 +31,8 @@ print("Confusion matrix (rows=actual, cols=predicted):")
 print(confusion_matrix(y_test, y_pred))
 
 # --- Part 2: hand-built sanity check set (modern, obvious examples) ---
-# You write these — real obvious-scam and obvious-real examples in TODAY's phrasing,
-# not EMSCAD's 2012-2014 vocabulary. This is the check that actually caught your
-# original bug, so it belongs here permanently, not as a one-off manual test.
+# Structured fields set to "unknown" for all of these — this tests what a
+# real user pasting text with no structured info would actually experience.
 sanity_examples = [
     ("Earn $5000/week from home! No experience needed, just pay a $50 registration fee via Bitcoin to get started. Contact us on Telegram.", 1),
     ("We're hiring a Senior Software Engineer with 5+ years of Python experience. Competitive salary, full benefits, hybrid work model. Apply via our careers page.", 0),
@@ -84,9 +83,9 @@ print("SANITY CHECK SET (hand-written, modern examples)")
 print("=" * 60)
 correct = 0
 for text, true_label in sanity_examples:
-    vec = vectorizer.transform([text])
-    pred = model.predict(vec)[0]
-    proba = model.predict_proba(vec)[0][1]
+    row = build_request_features(text)  # all structured fields default to "unknown"
+    pred = pipeline.predict(row)[0]
+    proba = pipeline.predict_proba(row)[0][1]
     status = "✓" if pred == true_label else "✗"
     correct += (pred == true_label)
     print(f"{status} expected={true_label} predicted={pred} (score={proba:.2f}) | {text[:60]}...")
