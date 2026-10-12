@@ -1,55 +1,53 @@
-# app/api/real_model.py — swappable model, SAME interface as mock_predict.
-# This is why main.py only needs its import line changed to switch from mock to real.
 from pathlib import Path
 import joblib
-
-from src.preprocessing import clean_text  # reuse the exact cleaning used at training time
+from src.preprocessing import clean_text
 
 MODEL_DIR = Path(__file__).resolve().parents[2] / "models"
 
-# Loaded once when this module is imported (i.e. once per API startup) —
-# NOT inside real_predict(), which would reload the model from disk on every
-# single request and make the API painfully slow.
-_vectorizer = joblib.load(MODEL_DIR / "tfidf_vectorizer.joblib")
-_model = joblib.load(MODEL_DIR / "fraud_classifier.joblib")
-_coefs = _model.coef_[0]
-_feature_names = _vectorizer.get_feature_names_out()
+_pipeline = joblib.load(MODEL_DIR / "fraud_pipeline.joblib")
+_term_stats = joblib.load(MODEL_DIR / "term_stats.joblib")
+_dataset_info = joblib.load(MODEL_DIR / "dataset_info.joblib")
 
-VERDICT_THRESHOLDS = {"high_risk": 0.6, "medium_risk": 0.3}  # kept identical to mock_model's
+_text_transformer = _pipeline.named_steps["features"].named_transformers_["text"]
+_feature_names = _text_transformer.get_feature_names_out()
+_coefs = _pipeline.named_steps["clf"].coef_[0][: len(_feature_names)]
+
+VERDICT_THRESHOLDS = {"high_risk": 0.6, "medium_risk": 0.3}
 
 
-def _top_contributing_terms(text_vector, top_n: int = 3) -> list[dict]:
-    """Explainability without SHAP: for THIS specific document, find which
-    words/phrases pushed the prediction most toward 'fraudulent' by ranking
-    (tfidf value in this doc) * (that term's learned coefficient).
-
-    NOTE: unlike mock_model's fixed FLAG_POOL (e.g. "no_company_logo"), these
-    flags are raw terms the model actually learned from — e.g. "wire_transfer"
-    or "processing_fee". That's a real trade-off: more honest/data-driven,
-    but less polished for a UI. Worth curating a mapping from top terms to
-    friendlier labels once you see what the model actually surfaces.
-    """
-    indices = text_vector.nonzero()[1]
-    contributions = [(i, text_vector[0, i] * _coefs[i]) for i in indices]
+def _top_contributing_terms(text: str, top_n: int = 3) -> list[dict]:
+    """Explainability grounded in real training-data statistics, not just a
+    vague coefficient ranking — each flag cites actual fraud rates from the
+    EMSCAD training set."""
+    text_vec = _text_transformer.transform([text])
+    indices = text_vec.nonzero()[1]
+    contributions = [(i, text_vec[0, i] * _coefs[i]) for i in indices]
     contributions.sort(key=lambda pair: pair[1], reverse=True)
 
     flags = []
-    for idx, contribution in contributions[:top_n]:
-        if contribution <= 0:
-            continue
+    for idx, contribution in contributions:
+        if contribution <= 0 or len(flags) >= top_n:
+            break
         term = _feature_names[idx]
-        flags.append({
-            "flag": term.replace(" ", "_"),
-            "evidence": f"Term '{term}' strongly associated with fraudulent postings in training data",
-        })
+        stat = _term_stats.get(term)
+        if stat:
+            evidence = (
+                f"Postings containing '{term}' were fraudulent {stat['rate_with']:.0%} of "
+                f"the time in our {_dataset_info['total_postings']:,}-posting training set "
+                f"(vs {stat['rate_without']:.0%} baseline), based on {stat['count']} occurrences."
+            )
+        else:
+            evidence = f"Term '{term}' contributed to this prediction based on patterns learned from training data."
+        flags.append({"flag": term.replace(" ", "_"), "evidence": evidence, "source": "ml_model"})
     return flags
 
 
-def real_predict(posting_text: str) -> dict:
+def real_predict(posting_text: str, **structured_fields) -> dict:
+    from src.preprocessing import build_request_features
     text = clean_text(posting_text)
-    vec = _vectorizer.transform([text])
+    row = build_request_features(posting_text, **structured_fields)
 
-    proba_fraud = _model.predict_proba(vec)[0][1]
+    proba_fraud = _pipeline.predict_proba(row)[0][1]
     score = round(float(proba_fraud), 2)
 
     if score > VERDICT_THRESHOLDS["high_risk"]:
@@ -59,7 +57,7 @@ def real_predict(posting_text: str) -> dict:
     else:
         verdict = "low_risk"
 
-    red_flags = _top_contributing_terms(vec) if score > VERDICT_THRESHOLDS["medium_risk"] else []
+    red_flags = _top_contributing_terms(text) if score > VERDICT_THRESHOLDS["medium_risk"] else []
     confidence = round(float(max(proba_fraud, 1 - proba_fraud)), 2)
 
     return {
@@ -67,4 +65,5 @@ def real_predict(posting_text: str) -> dict:
         "verdict": verdict,
         "red_flags": red_flags,
         "confidence": confidence,
+        "dataset_info": _dataset_info,
     }

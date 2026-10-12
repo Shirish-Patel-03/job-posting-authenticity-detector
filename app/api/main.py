@@ -18,13 +18,25 @@ app = FastAPI()
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(request: AnalyzeRequest, db: Session = Depends(get_db)):
-    result = real_predict(request.posting_text)
+    result = real_predict(
+        request.posting_text,
+        has_company_logo=request.has_company_logo,
+        has_screening_questions=request.has_screening_questions,
+        salary_listed=request.salary_listed,
+        employment_type=request.employment_type,
+        required_education=request.required_education,
+        required_experience=request.required_experience,
+    )
 
     plausibility = assess_plausibility(request.posting_text)
     if plausibility["implausible"] and result["risk_score"] < 0.6:
         result["risk_score"] = max(result["risk_score"], 0.65)
         result["verdict"] = "high_risk"
-        result["red_flags"].append({"flag": "implausible_content", "evidence": plausibility["reason"]})
+        result["red_flags"].append({
+            "flag": "implausible_content",
+            "evidence": plausibility["reason"],
+            "source": "llm_reasoning",
+        })
 
     explanation = narrate_red_flags(result["risk_score"], result["verdict"], result["red_flags"])
     links = build_verification_links(request.company_name)

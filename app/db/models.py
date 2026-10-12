@@ -17,3 +17,11 @@ class PredictionLog(Base):
     red_flags = Column(JSON, nullable=False)
     source = Column(String, default="text")  # "text" or "image" — set once an OCR endpoint exists
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserReport(Base):
+    __tablename__ = "user_reports"
+    id = Column(Integer, primary_key=True, index=True)
+    check_id = Column(String, index=True, nullable=False)
+    reason = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

@@ -17,7 +17,7 @@ ExperienceLevel = Literal[
 class RedFlag(BaseModel):
     flag: str
     evidence: str
-
+    source: str = "ml_model"
 
 class AnalyzeRequest(BaseModel):
     posting_text: str
@@ -27,6 +27,7 @@ class AnalyzeRequest(BaseModel):
     employment_type: EmploymentType = "unknown"
     required_education: EducationLevel = "unknown"
     required_experience: ExperienceLevel = "unknown"
+    company_name: str = ""
 
     @field_validator("posting_text")
     @classmethod
@@ -52,3 +53,6 @@ class AnalyzeResponse(BaseModel):
     confidence: float
     check_id: str
     created_at: str
+    explanation: str          
+    verification_links: dict 
+
